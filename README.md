@@ -1,6 +1,6 @@
-# OP GG Client AD Patch
+# OP.GG Client AD Patch
 
-OP GG Client AD Patch is an automated patcher for the OP.GG Desktop Client that removes advertisements. This project uses GitHub Actions to automatically download the latest installer, patch the client, and then create a release with a portable version available for download.
+OP.GG Client AD Patch is an automated patcher for the OP.GG Desktop Client that removes advertisements. This project uses GitHub Actions to automatically download the latest installer, patch the client, and then create a release with a portable version available for download.
 
 ## Usage
 
