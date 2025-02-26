@@ -1,0 +1,131 @@
+name: Auto Patch and Release
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  check_new_version:
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.check.outputs.new_version }}
+      should_patch: ${{ steps.check.outputs.should_patch }}
+    steps:
+      - name: Get latest version from API
+        id: get_version
+        run: |
+          timestamp=$(date +%s%3N)
+          version=$(curl -s "https://desktop-app-data.op.gg/app/i18n/v2/versions.json?v=${timestamp}" | jq -r '.en')
+          echo "Latest version from API: $version"
+          echo "new_version=$version" >> $GITHUB_OUTPUT
+
+      - name: Get last release tag (with fallback)
+        id: get_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          last_tag=$(curl -s -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/${{ github.repository }}/releases/latest" | jq -r '.tag_name // ""')
+          echo "Last release tag: $last_tag"
+          echo "last_tag=$last_tag" >> $GITHUB_OUTPUT
+
+      - name: Compare versions and check force_patch
+        id: check
+        run: |
+          force="${{ github.event.inputs.force_patch }}"
+          if [ "$force" == "true" ]; then
+            echo "Force patch enabled."
+            echo "should_patch=true" >> $GITHUB_OUTPUT
+          else
+            new_version="${{ steps.get_version.outputs.new_version }}"
+            last_tag="${{ steps.get_release.outputs.last_tag }}"
+            echo "New version: $new_version"
+            echo "Last tag: $last_tag"
+            if [ "$new_version" != "$last_tag" ]; then
+              echo "New version detected."
+              echo "should_patch=true" >> $GITHUB_OUTPUT
+            else
+              echo "No new version detected."
+              echo "should_patch=false" >> $GITHUB_OUTPUT
+            fi
+          fi
+          echo "new_version=${{ steps.get_version.outputs.new_version }}" >> $GITHUB_OUTPUT
+
+
+  patch_and_release:
+    needs: check_new_version
+    if: ${{ needs.check_new_version.outputs.should_patch == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      PLUGINSDIR: '$PLUGINSDIR'
+      R0: '$R0'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full zip
+
+      - name: Download latest installer
+        run: curl -L https://op.gg/desktop/download/latest -o OP.GG_Setup.exe
+
+      - name: Extract installer
+        run: 7z x OP.GG_Setup.exe -oextracted
+
+      - name: Extract app-64.7z from $PLUGINSDIR
+        run: |
+          7z x "extracted/${PLUGINSDIR}/app-64.7z" -o"extracted/app-64"
+
+      - name: Extract asar
+        working-directory: extracted/app-64/resources
+        run: npx asar extract app.asar temp
+
+      - name: Patch main.js
+        run: |
+          node -e "const fs = require('fs'); \
+            const filePath = 'extracted/app-64/resources/temp/assets/main/main.js'; \
+            let content = fs.readFileSync(filePath, 'utf8'); \
+            const target = '(t.subscriptions||[]).reduce((function(e,t){return t.expiry_at&&1e3*t.expiry_at>Date.now()&&(e=r(r([],e,!0),t.features||[],!0)),e}),[])'; \
+            const replacement = JSON.stringify(['ad_free','premium_badge','lol_mypage','lol_favorites','lol_auto_record','lol_super_renew','tft_mypage','val_mypage','duo_pull_up','duo_highlight']); \
+            content = content.replace(target, replacement); \
+            fs.writeFileSync(filePath, content);"
+
+      - name: Repack app.asar
+        working-directory: extracted/app-64/resources
+        run: npx asar pack temp app.asar
+
+      - name: Delete temp folder to save space
+        working-directory: extracted/app-64/resources
+        run: rm -rf temp
+
+      - name: Zip app-64
+        run: |
+          cd extracted
+          zip -r OP.GG-Patched.zip app-64
+          cd ..
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ needs.check_new_version.outputs.new_version }}
+          release_name: "Patch for version ${{ needs.check_new_version.outputs.new_version }}"
+          draft: false
+          prerelease: false
+
+      - name: Upload release asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: extracted/OP.GG-Patched.zip
+          asset_name: OP.GG-Patched.zip
+          asset_content_type: application/zip
