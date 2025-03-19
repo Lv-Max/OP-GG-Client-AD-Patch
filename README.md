@@ -6,7 +6,7 @@ OP.GG Client AD Patch is an automated patcher for the OP.GG Desktop Client that 
 
 1. Download and decompress the zip file from the [Releases](https://github.com/Lv-Max/OP-GG-Client-AD-Patch/releases) page.
 2. Open `OP.GG.exe`.
-3. Login in any op.gg account, enjoy!
+3. ~Login in any op.gg account~ No login needed, enjoy!
 
 ## Disclaimer
 
