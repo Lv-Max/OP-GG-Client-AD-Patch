@@ -85,109 +85,10 @@ jobs:
         working-directory: extracted/app-64/resources
         run: npx asar extract app.asar temp
 
-      - name: Patch main.js
-        run: |          
-          node -e "
-            const fs = require('fs');
-            const filePath = 'extracted/app-64/resources/temp/assets/main/main.js';
-            let content = fs.readFileSync(filePath, 'utf8');
-            console.log('File size: ' + content.length + ' bytes');
-            let patchCount = 0;
-            
-            // Function to apply patches with multiple fallback patterns
-            function applyPatch(name, patterns, replacement) {
-              console.log('===== Attempting ' + name + ' patch =====');
-              
-              // Try each pattern in sequence
-              for (let i = 0; i < patterns.length; i++) {
-                try {
-                  const regex = new RegExp(patterns[i]);
-                  console.log('Trying pattern #' + (i+1));
-                  
-                  if (content.match(regex)) {
-                    console.log('Match found! Applying patch...');
-                    content = content.replace(regex, replacement);
-                    fs.writeFileSync(filePath, content);
-                    console.log(name + ' successfully patched!');
-                    patchCount++;
-                    return true;
-                  }
-                } catch (err) {
-                  console.error('Error with pattern #' + (i+1) + ':', err.message);
-                }
-              }
-              
-              // Try simple substring match as last resort
-              const simplePattern = patterns[patterns.length - 1].replace(/\\\\/g, '\\').replace(/\\\\\\(/g, '(').replace(/\\\\\\)/g, ')');
-              console.log('Trying simple substring match');
-              if (content.includes(simplePattern)) {
-                console.log('Simple match found! Applying patch...');
-                content = content.replace(simplePattern, replacement);
-                fs.writeFileSync(filePath, content);
-                console.log(name + ' patched using simple match!');
-                patchCount++;
-                return true;
-              }
-              
-              console.log(name + ' patch FAILED - no match found');
-              return false;
-            }
-            
-            // 1. Patch member info function - Replace with fixed VIP data
-            const memberPatterns = [
-              'var o=function\\\\(\\\\){var e;try{var t=m.get\\\\(\"_ot_v2_member\"\\\\)\\\\|\\\\|{};return{mid:t.mid\\\\?parseInt\\\\(t.mid\\\\):null,email:null!==\\\\(e=t.email\\\\)&&void 0!==e\\\\?e:null,nickname:t.nick,subscriptions:t.subscriptions\\\\|\\\\|\\\\[\\\\],features:\\\\(t.subscriptions\\\\|\\\\|\\\\[\\\\]\\\\).reduce\\\\(\\\\(function\\\\(e,t\\\\){return t.expiry_at&&1e3\\\\*t.expiry_at>Date.now\\\\(\\\\)&&\\\\(e=r\\\\(r\\\\(\\\\[\\\\],e,!0\\\\),t.features\\\\|\\\\|\\\\[\\\\],!0\\\\)\\\\),e}\\\\),\\\\[\\\\]\\\\)}}catch\\\\(e\\\\){console.log\\\\(e\\\\)}return{mid:null,email:null,nickname:null,subscriptions:\\\\[\\\\],features:\\\\[\\\\]}\\\\}\\\\(\\\\);',
-              'var o=function\\\\(\\\\){var e;try{var t=m.get',
-              'var o=function(){var e;try{var t=m.get'
-            ];
-            const memberReplacement = 'var o={mid:4396,email:\"HideOnBush\",nickname:\"JieJie\",subscriptions:[\"premium\"],features:[\"ad_free\",\"premium_badge\",\"lol_mypage\",\"lol_favorites\",\"lol_auto_record\",\"lol_super_renew\",\"tft_mypage\",\"val_mypage\",\"duo_pull_up\",\"duo_highlight\"]};';
-            applyPatch('Member info', memberPatterns, memberReplacement);
-            
-            // 2. Patch logout function - Comment out its contents
-            const logoutPatterns = [
-              'function w\\\\(\\\\){m\\\\.delete\\\\(\"_ot\"\\\\),m\\\\.delete\\\\(\"_ot_member\"\\\\),m\\\\.delete\\\\(\"_ot_v2_refresh\"\\\\),m\\\\.delete\\\\(\"_ot_v2_refresh_at\"\\\\),m\\\\.delete\\\\(\"_ot_v2_member\"\\\\),m\\\\.delete\\\\(\"_ot_v2_member_game_profile\"\\\\),m\\\\.delete\\\\(\"_ot_guest\"\\\\),I\\\\.delete\\\\(\"member\"\\\\),b\\\\(\"logout\",\\\\{opgg:!1,opggId:null\\\\}\\\\),S\\\\(\\\\)}',
-              'function w\\\\(\\\\){m\\\\.delete',
-              'function w(){m.delete'
-            ];
-            const logoutReplacement = 'function w(){/*m.delete(\"_ot\"),m.delete(\"_ot_member\"),m.delete(\"_ot_v2_refresh\"),m.delete(\"_ot_v2_refresh_at\"),m.delete(\"_ot_v2_member\"),m.delete(\"_ot_v2_member_game_profile\"),m.delete(\"_ot_guest\"),I.delete(\"member\"),b(\"logout\",{opgg:!1,opggId:null}),S()*/}';
-            applyPatch('Logout function', logoutPatterns, logoutReplacement);
-            
-            // 3. Patch app startup - Inject VIP setup code
-            const bootPatterns = [
-              'g.whenReady\\\\(\\\\).then\\\\(\\\\(function\\\\(\\\\){\\\\(f\\\\|\\\\|H\\\\(\\\\)\\\\)&&E\\\\(\\\\)}\\\\)\\\\)',
-              'g.whenReady\\\\(\\\\).then\\\\(',
-              'g.whenReady().then('
-            ];
-            const bootReplacement = 'g.whenReady().then((function(){(f||H())&&E();var faker={mid:4396,email:\"HideOnBush\",nick:\"JieJie\",subscriptions:[\"premium\"]};m.set(\"_ot_v2_member\",faker);I.set(\"member\",{mid:faker.mid,email:faker.email,nickname:faker.nick,subscriptions:faker.subscriptions,features:[\"ad_free\",\"premium_badge\",\"lol_mypage\",\"lol_favorites\",\"lol_auto_record\",\"lol_super_renew\",\"tft_mypage\",\"val_mypage\",\"duo_pull_up\",\"duo_highlight\"]});I.set(\"guest\",!1);S()}))';
-            applyPatch('Boot sequence', bootPatterns, bootReplacement);
-            
-            // Final fallback: Direct code injection method
-            if (patchCount === 0) {
-              console.log('\\n===== EMERGENCY FALLBACK =====');
-              console.log('No patches succeeded. Attempting direct code injection...');
-              
-              // Find a safe injection point
-              const appStart = content.indexOf('g.whenReady()');
-              if (appStart !== -1) {
-                console.log('Injection point found at position: ' + appStart);
-                
-                // Create injection code
-                const injectCode = '\\n// VIP Access Injection\\nvar __fakeVIP={mid:4396,email:\"HideOnBush\",nick:\"JieJie\",subscriptions:[\"premium\"]};\\nm.set(\"_ot_v2_member\",__fakeVIP);\\nI.set(\"member\",{mid:__fakeVIP.mid,email:__fakeVIP.email,nickname:__fakeVIP.nick,subscriptions:__fakeVIP.subscriptions,features:[\"ad_free\",\"premium_badge\",\"lol_mypage\",\"lol_favorites\",\"lol_auto_record\",\"lol_super_renew\",\"tft_mypage\",\"val_mypage\",\"duo_pull_up\",\"duo_highlight\"]});\\nI.set(\"guest\",!1);\\nS();\\n';
-                
-                // Inject code
-                const newContent = content.slice(0, appStart) + injectCode + content.slice(appStart);
-                fs.writeFileSync(filePath, newContent);
-                console.log('Emergency code injection successful!');
-              } else {
-                console.error('CRITICAL ERROR: Failed to find injection point!');
-                console.log('Please check if the app structure has significantly changed.');
-                process.exit(1);
-              }
-            }
-            
-            console.log('\\n===== PATCH SUMMARY =====');
-            console.log('Total successful patches: ' + patchCount + ' out of 3');
-            console.log('Patch process completed!');
-          "
+      - name: Download and Run patch script
+        run: |
+          curl -L https://raw.githubusercontent.com/Lv-Max/OP-GG-Client-AD-Patch/main/patch.js -o patch.js
+          node patch.js
             
       - name: Repack app.asar
         working-directory: extracted/app-64/resources
@@ -218,8 +119,3 @@ jobs:
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: extracted/OP.GG-Patched.zip
-          asset_name: OP.GG-Patched.zip
-          asset_content_type: application/zip
