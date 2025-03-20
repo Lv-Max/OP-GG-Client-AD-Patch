@@ -3,47 +3,38 @@ const filePath = "extracted/app-64/resources/temp/assets/main/main.js";
 
 let content = fs.readFileSync(filePath, "utf8");
 
-const patches = [
-  {
-    name: "Member info patch",
-    target:
-      'var o=function(){var e;try{var t=m.get("_ot_v2_member")||{};return{mid:t.mid?parseInt(t.mid):null,email:null!==(e=t.email)&&void 0!==e?e:null,nickname:t.nick,subscriptions:t.subscriptions||[],features:(t.subscriptions||[]).reduce((function(e,t){return t.expiry_at&&1e3*t.expiry_at>Date.now()&&(e=i(i([],e,!0),t.features||[],!0)),e}),[])}}catch(e){console.log(e)}return{mid:null,email:null,nickname:null,subscriptions:[],features:[]}}();return n||(I.set("member",o),I.set("guest",H())),o}',
-    replacement:
-      'var o={mid:4396,email:"HideOnBush",nickname:"JieJie",subscriptions:["premium"],features:["ad_free","premium_badge","lol_mypage","lol_favorites","lol_auto_record","lol_super_renew","tft_mypage","val_mypage","duo_pull_up","duo_highlight"]};return n||(I.set("member",o),I.set("guest",!1)),o',
-  },
-  {
-    name: "Logout function patch",
-    target:
-      'function w\\(\\)\\{m\\.delete\\("_ot"\\),m\\.delete\\("_ot_member"\\),m\\.delete\\("_ot_v2_refresh"\\),m\\.delete\\("_ot_v2_refresh_at"\\),m\\.delete\\("_ot_v2_member"\\),m\\.delete\\("_ot_v2_member_game_profile"\\),m\\.delete\\("_ot_guest"\\),I\\.delete\\("member"\\),f\\("logout",\\{opgg\\:!1,opggId\\:null\\}\\),S\\(\\)\\}',
-    replacement:
-      'function w(){/*m.delete("_ot"),m.delete("_ot_member"),m.delete("_ot_v2_refresh"),m.delete("_ot_v2_refresh_at"),m.delete("_ot_v2_member"),m.delete("_ot_v2_member_game_profile"),m.delete("_ot_guest"),I.delete("member"),f("logout",{opgg:!1,opggId:null}),S()*/}',
-  },
-  {
-    name: "Boot sequence patch",
-    target:
-      "d.whenReady\\(\\).then\\(\\(function\\(\\){\\(b\\|\\|H\\(\\)\\)&&N\\(\\)}\\)\\)",
-    replacement:
-      'd.whenReady().then((function(){(b||H())&&N();var faker={mid:4396,email:"HideOnBush",nick:"JieJie",subscriptions:["premium"]};m.set("_ot_v2_member",faker);I.set("member",{mid:faker.mid,email:faker.email,nickname:faker.nick,subscriptions:faker.subscriptions,features:["ad_free","premium_badge","lol_mypage","lol_favorites","lol_auto_record","lol_super_renew","tft_mypage","val_mypage","duo_pull_up","duo_highlight"]});I.set("guest",!1);N()}))',
-  },
-];
-
 let patchCount = 0;
 
-patches.forEach((patch) => {
-  const regex = new RegExp(patch.target);
+let userIdRegex = /(\w+)\.set\("userid",(\w+)\);/;
+if (userIdRegex.test(content)) {
+  content = content.replace(userIdRegex, (match, E_var, X_var) => {
+    console.log(
+      `[+] Insert member data: detected variables E=${E_var}, X=${X_var}`
+    );
+    return `${E_var}.set("userid",${X_var});${E_var}.set("_ot_v2_member",JSON.parse('{"mid":4396,"provider":"opgg","nick":"JieJie","email":"Lv-Max","subscriptions":[{"plan_id":3,"plan_name":"OP.GG Ad-free","expiry_at":4092646149,"features":["ad_free","premium_badge","lol_mypage","lol_favorites","lol_auto_record","lol_super_renew","tft_mypage","val_mypage","duo_pull_up","duo_highlight"],"state":"expiring"}],"scopes":["remember","base"],"zendesk_token":"hi"}'));${E_var}.set("_ot","TSM");${E_var}.set("_ot_v2_refresh","T1");${E_var}.set("_ot_v2_refresh_at",4092646149000);`;
+  });
+  patchCount++;
+} else {
+  console.error("Insert member data: target not found.");
+}
 
-  if (content.match(regex)) {
-    console.log(`${patch.name}: match found, applying patch...`);
-    content = content.replace(regex, patch.replacement);
-    patchCount++;
-  } else {
-    console.error(`${patch.name}: target not found.`);
-  }
-});
+let featuresRegex =
+  /features:\((\w+)\.subscriptions\|\|\[\]\)\.reduce\(\(function\(\w+,\w+\)\{.*?\}\),\[\]\)/;
+
+if (featuresRegex.test(content)) {
+  content = content.replace(
+    featuresRegex,
+    'features:["ad_free","premium_badge","lol_mypage","lol_favorites","lol_auto_record","lol_super_renew","tft_mypage","val_mypage","duo_pull_up","duo_highlight"]'
+  );
+  patchCount++;
+  console.log("[+] Features array replaced successfully.");
+} else {
+  console.error("Replace features array: target not found.");
+}
 
 if (patchCount > 0) {
   fs.writeFileSync(filePath, content);
   console.log(`Total patches applied: ${patchCount}`);
 } else {
-  console.error("No patches applied. Check patterns.");
+  console.error("No patches applied. Check patterns carefully.");
 }
