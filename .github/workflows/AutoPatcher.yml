@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       new_version: ${{ steps.check.outputs.new_version }}
+      new_tag: ${{ steps.check.outputs.new_tag }}
       should_patch: ${{ steps.check.outputs.should_patch }}
     steps:
       - name: Get latest version from API
