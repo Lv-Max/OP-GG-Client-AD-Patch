@@ -133,7 +133,6 @@ jobs:
 
           # Prepare No-Login Zip
           mv app-64/resources/app-nologin.asar app-64/resources/app.asar
-          rm -f app-64/resources/app-login.asar
           zip -r OP.GG-NoLogin-Patched.zip app-64
 
           # Prepare Login Zip
