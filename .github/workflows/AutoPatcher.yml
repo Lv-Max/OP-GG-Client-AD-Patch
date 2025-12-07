@@ -153,33 +153,13 @@ jobs:
           echo "Deleting all previous releases..."
           gh release list --limit 100 --json tagName -q '.[].tagName' | xargs -I {} gh release delete {} --cleanup-tag -y || true
 
-      - name: Create GitHub Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ needs.check_new_version.outputs.new_tag }}
-          release_name: "Patch for version ${{ needs.check_new_version.outputs.new_version }}"
-          draft: false
-          prerelease: false
-
-      - name: Upload No-Login Asset
-        uses: actions/upload-release-asset@v1
+          name: "Patch for version ${{ needs.check_new_version.outputs.new_version }}"
+          files: |
+            extracted/OP.GG-NoLogin-Patched.zip
+            extracted/OP.GG-Login-Patched.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: extracted/OP.GG-NoLogin-Patched.zip
-          asset_name: OP.GG-NoLogin-Patched.zip
-          asset_content_type: application/zip
-
-      - name: Upload Login Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: extracted/OP.GG-Login-Patched.zip
-          asset_name: OP.GG-Login-Patched.zip
-          asset_content_type: application/zip
