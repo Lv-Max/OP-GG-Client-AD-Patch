@@ -1,16 +1,52 @@
 # OP.GG Client AD Patch
 
-OP.GG Client AD Patch is an automated patcher for the OP.GG Desktop Client that removes advertisements. This project uses GitHub Actions to automatically download the latest installer, patch the client, and then create a release with a portable version available for download.
+Automated ad-removal patcher for the OP.GG Desktop Client. This project removes advertisements and unlocks premium features.
 
-## Usage
+## 📥 Downloads (GitHub Releases)
 
-1. Download and decompress the zip file from the [Releases](https://github.com/Lv-Max/OP-GG-Client-AD-Patch/releases) page.
-2. Open `OP.GG.exe`.
-3. ~Login in any op.gg account~ No login needed, enjoy!
+We provide **two** versions in each [Release](https://github.com/Lv-Max/OP-GG-Client-AD-Patch/releases):
 
-## Disclaimer
+### 1. Login Version
 
-This project is not affiliated with or endorsed by OP.GG. Use this patch at your own risk. The maintainer is not responsible for any issues or damages that may occur from using this patch.
+- **File**: `OP.GG-Login-Patched.zip`
+- **Features**:
+  - Works with your **personal OP.GG account**.
+  - Unlocks subscribers-only features.
+  - **Requires Login.**
+
+### 2. No-Login Version
+
+- **File**: `OP.GG-NoLogin-Patched.zip`
+- **Features**:
+  - **No Login Required**.
+  - Unlocks subscribers-only features.
+
+## 🛠️ Local Patcher Tool
+
+You can also patch your own existing installation using the included Python tool.
+
+### Prerequisites
+
+- [Python 3.x](https://www.python.org/downloads/)
+- [Node.js](https://nodejs.org/)
+  - npm install -g @electron/asar
+
+### Usage
+
+1.  Clone or download this repository.
+2.  Run the patcher:
+    ```bash
+    python patcher.py
+    ```
+3.  The GUI will open:
+    - **Auto-detects** your OP.GG installation path.
+    - **Select Mode**: Choose "Login Version" or "No-Login Version".
+    - **Patch**: Click to apply.
+    - **Restore**: Click to revert changes if needed.
+
+## ⚠️ Disclaimer
+
+This project is not affiliated with or endorsed by OP.GG. Use this patch at your own risk. The maintainer is not responsible for any issues or damages that may occur.
 
 ## License
 
