@@ -17,7 +17,7 @@ import (
 // Nothing on disk is changed, so it keeps working across OP.GG updates.
 
 func main() {
-	fmt.Println("OP.GG Launcher")
+	fmt.Println("OP.GG Launcher - https://github.com/Lv-Max/OP-GG-Client-AD-Patch")
 
 	exe, err := findClient()
 	if err != nil {
