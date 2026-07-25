@@ -116,13 +116,29 @@ jobs:
           # Modify package.json to point to hook.js
           sed -i 's|"main": "assets/main/main.js"|"main": "assets/main/hook.js"|g' extracted/app-64/resources/temp_login/package.json
 
+      # --unpack is mandatory: without it the native modules get embedded in the
+      # archive, lose their "unpacked" flag, and electron-overlay.node ends up
+      # dlopen'd from a lone temp copy where it can no longer find its sibling
+      # n_overlay.x64.dll / injector.exe -> the in-game overlay silently dies.
+      # The installer's own app.asar.unpacked is a superset of the sidecar we
+      # generate here and stays in place, so the sidecar is redundant.
       - name: Repack app.asar (No-Login)
         working-directory: extracted/app-64/resources
-        run: npx asar pack temp_nologin app-nologin.asar
+        run: |
+          npx asar pack temp_nologin app-nologin.asar --unpack "*.{node,dll,exe,bat}"
+          rm -rf app-nologin.asar.unpacked
 
       - name: Repack app.asar (Login)
         working-directory: extracted/app-64/resources
-        run: npx asar pack temp_login app-login.asar
+        run: |
+          npx asar pack temp_login app-login.asar --unpack "*.{node,dll,exe,bat}"
+          rm -rf app-login.asar.unpacked
+
+      - name: Verify native modules stayed unpacked
+        run: |
+          RES=extracted/app-64/resources
+          node tools/verify-asar-unpacked.js "$RES/app.asar" "$RES/app-login.asar"
+          node tools/verify-asar-unpacked.js "$RES/app.asar" "$RES/app-nologin.asar"
 
       - name: Delete temp folders
         working-directory: extracted/app-64/resources
@@ -131,27 +147,35 @@ jobs:
       - name: Create ZIPs
         run: |
           cd extracted
+          RES=app-64/resources
 
-          # Prepare No-Login Zip
-          mv app-64/resources/app-nologin.asar app-64/resources/app.asar
-          zip -r OP.GG-NoLogin-Patched.zip app-64
+          # Keep the spare archives outside app-64 so each zip carries exactly
+          # one app.asar instead of all three.
+          mkdir -p stash
+          mv "$RES/app.asar" stash/app-original.asar
+          mv "$RES/app-login.asar" "$RES/app-nologin.asar" stash/
 
-          # Prepare Login Zip
-          mv app-64/resources/app.asar app-64/resources/app-nologin.asar # stash it back
+          cp stash/app-nologin.asar "$RES/app.asar"
+          zip -r -q OP.GG-NoLogin-Patched.zip app-64
+          rm "$RES/app.asar"
 
-          cp app-64/resources/app-nologin.asar app-64/resources/app.asar
-          zip -r OP.GG-NoLogin-Patched.zip app-64
+          cp stash/app-login.asar "$RES/app.asar"
+          zip -r -q OP.GG-Login-Patched.zip app-64
 
-          # Bundle Login
-          cp app-64/resources/app-login.asar app-64/resources/app.asar
-          zip -r OP.GG-Login-Patched.zip app-64
+          rm -rf stash
+          ls -lh OP.GG-*.zip
 
-      - name: Delete Old Releases
+      # Keep a few older releases around so users can roll back if a build
+      # turns out to be broken.
+      - name: Prune Old Releases
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Deleting all previous releases..."
-          gh release list --limit 100 --json tagName -q '.[].tagName' | xargs -I {} gh release delete {} --cleanup-tag -y || true
+          KEEP=3
+          echo "Keeping the $KEEP most recent releases..."
+          gh release list --limit 100 --json tagName,createdAt \
+            -q 'sort_by(.createdAt) | reverse | .['"$KEEP"':] | .[].tagName' \
+            | xargs -r -I {} gh release delete {} --cleanup-tag -y || true
 
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v1
