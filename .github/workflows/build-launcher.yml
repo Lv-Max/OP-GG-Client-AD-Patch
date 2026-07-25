@@ -1,0 +1,44 @@
+name: Build Launcher
+
+on:
+  push:
+    branches:
+      - main # build a fresh exe (downloadable from the run's artifacts)
+    tags:
+      - "v*" # additionally publish a GitHub Release
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: launcher/go.sum
+
+      - name: Build Windows launcher
+        working-directory: launcher
+        run: |
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "OP.GG Launcher.exe" .
+          ls -lh "OP.GG Launcher.exe"
+
+      # Grab the exe from a manual run's artifacts, or from a tagged Release.
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OP.GG-Launcher
+          path: launcher/OP.GG Launcher.exe
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: launcher/OP.GG Launcher.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

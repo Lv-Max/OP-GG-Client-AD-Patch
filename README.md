@@ -1,53 +1,45 @@
 # OP.GG Client AD Patch
 
-Automated ad-removal patcher for the OP.GG Desktop Client. This project removes advertisements and unlocks premium features.
+A tiny launcher that removes ads and unlocks the subscriber-only features in the
+**OP.GG Desktop Client** — **without modifying any of the app's files**. Because
+nothing on disk is touched, it keeps working across the client's auto-updates.
 
-## 📥 Downloads (GitHub Releases)
+## 📥 Usage
 
-We provide **two** versions in each [Release](https://github.com/Lv-Max/OP-GG-Client-AD-Patch/releases):
+1. Download `OP.GG Launcher.exe` from the [Releases](https://github.com/Lv-Max/OP-GG-Client-AD-Patch/releases) page (or from a workflow run's artifacts).
+2. Double-click it.
+3. A console window appears for a few seconds. When it prints `patch applied`, the OP.GG client opens with no ads.
 
-### 1. Login Version
+Use the launcher (instead of the original OP.GG shortcut) each time you start the app.
 
-- **File**: `OP.GG-Login-Patched.zip`
-- **Features**:
-  - Works with your **personal OP.GG account**.
-  - Unlocks subscribers-only features.
-  - **Requires Login.**
+- **Signed in or signed out — both work.** You can sign in with your own OP.GG account once (it's remembered) and keep your real profile, or stay signed out; either way the ads are removed.
+- If OP.GG is already running, the launcher closes it first (the client's single-instance lock means the patch can only apply to a fresh launch).
 
-### 2. No-Login Version
+## 🛠️ Build
 
-- **File**: `OP.GG-NoLogin-Patched.zip`
-- **Features**:
-  - **No Login Required**.
-  - Unlocks subscribers-only features.
+Requires [Go](https://go.dev/) 1.24+.
 
-## 🛠️ Local Patcher Tool
+```bash
+cd launcher
+GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o "OP.GG Launcher.exe" .
+```
 
-You can also patch your own existing installation using the included Python tool.
+CI builds the same binary on every tag push and manual run (see
+[`.github/workflows/build-launcher.yml`](.github/workflows/build-launcher.yml)).
 
-### Prerequisites
+### Source layout
 
-- [Python 3.x](https://www.python.org/downloads/)
-- [Node.js](https://nodejs.org/)
-  - npm install -g @electron/asar
-
-### Usage
-
-1.  Clone or download this repository.
-2.  Run the patcher:
-    ```bash
-    python patcher.py
-    ```
-3.  The GUI will open:
-    - **Auto-detects** your OP.GG installation path.
-    - **Select Mode**: Choose "Login Version" or "No-Login Version".
-    - **Patch**: Click to apply.
-    - **Restore**: Click to revert changes if needed.
+| File | Purpose |
+|---|---|
+| [`launcher/main.go`](launcher/main.go) | Locate the client, launch it with the inspector, drive the injection, detach. |
+| [`launcher/cdp.go`](launcher/cdp.go) | Minimal Chrome DevTools Protocol client over the inspector WebSocket. |
+| [`launcher/inject.go`](launcher/inject.go) | The JavaScript hook run inside the client's main process. |
 
 ## ⚠️ Disclaimer
 
-This project is not affiliated with or endorsed by OP.GG. Use this patch at your own risk. The maintainer is not responsible for any issues or damages that may occur.
+This project is not affiliated with or endorsed by OP.GG. Use at your own risk.
+The maintainer is not responsible for any issues or damages that may occur.
 
 ## License
 
-This project is licensed under the [GNU License](LICENSE).
+Licensed under the [GNU License](LICENSE).
