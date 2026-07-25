@@ -1,200 +1,175 @@
-const https = require('https');
-const originalRequest = https.request;
+'use strict';
 
-// Premium Features Configuration
-const PREMIUM_DATA = {
-    expiry_at: 253402300799, // Far future date
-    features: [
-        "ad_free", "premium_badge", "lol_mypage", "lol_favorites", 
-        "lol_auto_record", "lol_super_renew", "tft_mypage", 
-        "val_mypage", "duo_pull_up", "duo_highlight"
-    ]
+/**
+ * OP.GG Client AD Patch - runtime hook.
+ *
+ * This file replaces `assets/main/main.js` as the Electron entry point
+ * (package.json "main"). It patches `electron-store` and then hands control to
+ * the untouched original main.js. Nothing in the app bundle is rewritten.
+ *
+ * Why the store and not the network or the bundle:
+ *
+ *   member-api.op.gg /v2/members/me
+ *          -> AppStore.set('_ot_v2_member', data)          (store-app.json)
+ *          -> features = subscriptions.reduce(not-expired -> spread features)
+ *          -> WebStore.set('member', {mid, email, features}) (store-web.json)
+ *          -> renderer reads member.features to decide whether to draw ads
+ *
+ * `_ot_v2_member` is the single point every path converges on, and it is a
+ * persisted data shape rather than minified code - so this hook does not care
+ * what the webpack bundle looks like this week.
+ *
+ * Two build flavours share this file. A No-Login build ships an empty marker
+ * file `nologin.flag` next to it, which additionally synthesises a member for
+ * users who never signed in.
+ */
+
+const fs = require('fs');
+const path = require('path');
+
+const TAG = '[opgg-patch]';
+
+const FEATURES = [
+  'ad_free',
+  'premium_badge',
+  'lol_mypage',
+  'lol_favorites',
+  'lol_auto_record',
+  'lol_super_renew',
+  'tft_mypage',
+  'val_mypage',
+  'duo_pull_up',
+  'duo_highlight',
+];
+
+// Seconds, not milliseconds - the app compares `1e3 * expiry_at > Date.now()`.
+const FAR_FUTURE = 4102444800; // 2100-01-01T00:00:00Z
+
+const PREMIUM_SUBSCRIPTION = {
+  plan_id: 3,
+  plan_name: 'OP.GG Ad-free',
+  state: 'active',
+  expiry_at: FAR_FUTURE,
+  features: FEATURES,
 };
 
-console.log('[OPGGHOOK] Hook loaded. Initializing interception...');
+const NO_LOGIN = fs.existsSync(path.join(__dirname, 'nologin.flag'));
 
-https.request = function(...args) {
-    let urlOrOptions = args[0];
-    let options = args[1] || {};
-    let callback = args[2];
-    
-    // Handle simplified "url, callback" signature or "options, callback"
-    if (typeof options === 'function') {
-        callback = options;
-        options = {};
-    }
-
-    let isTarget = false;
-    let reqUrl = '';
-    let reqHostname = '';
-
-    // Normalize input to find target
-    if (typeof urlOrOptions === 'string') {
-        if (urlOrOptions.includes('/v2/members/me') || urlOrOptions.includes('member-api.op.gg')) {
-            isTarget = true;
-            reqUrl = urlOrOptions;
-        }
-    } else if (typeof urlOrOptions === 'object' && urlOrOptions !== null) {
-        reqUrl = urlOrOptions.path || urlOrOptions.pathname || '';
-        reqHostname = urlOrOptions.hostname || urlOrOptions.host || '';
-        
-        if (reqUrl.includes('/v2/members/me') || reqHostname.includes('member-api.op.gg')) {
-            isTarget = true;
-        }
-    }
-
-    if (isTarget) {
-        console.log('[OPGGHOOK] Intercepting Member API Request (Object/String matched)');
-
-        // Force identity encoding to avoid gzip/br so we can parse JSON
-        if (typeof urlOrOptions === 'object') {
-            urlOrOptions.headers = urlOrOptions.headers || {};
-            // Remove existing compression headers
-            const keys = Object.keys(urlOrOptions.headers);
-            for(const k of keys) {
-                if(k.toLowerCase() === 'accept-encoding') delete urlOrOptions.headers[k];
-            }
-            urlOrOptions.headers['Accept-Encoding'] = 'identity';
-        } else {
-             // If string, we need to merge into options or modify headers if options exists
-             if (!options) options = {};
-             options.headers = options.headers || {};
-             options.headers['Accept-Encoding'] = 'identity';
-             args[1] = options; // Update args
-        }
-
-        // Intercept response
-        const req = originalRequest.apply(this, args);
-        
-        const originalEmit = req.emit;
-        req.emit = function(type, ...emitArgs) {
-             if (type === 'response') {
-                 const res = emitArgs[0];
-                 if (res.statusCode >= 200 && res.statusCode < 300) {
-                     console.log('[OPGGHOOK] API Response received (Status:', res.statusCode, '). Buffering data...');
-                     
-                     const chunks = [];
-                     res.on('data', (chunk) => chunks.push(chunk));
-                     res.on('end', () => {
-                         try {
-                             const buffer = Buffer.concat(chunks);
-                             let body = buffer.toString('utf8');
-                             
-                             // Try parsing
-                             let json = null;
-                             try { json = JSON.parse(body); } catch(e) { console.log('[OPGGHOOK] JSON Parse error (might be raw?):', e.message); }
-
-                             if (json && json.data) {
-                                 console.log('[OPGGHOOK] Injecting Premium Data...');
-                                 json.data.subscriptions = [PREMIUM_DATA];
-                                 
-                                 const newBody = JSON.stringify(json);
-                                 const modifiedStream = new (require('stream').PassThrough)();
-                                 modifiedStream.push(newBody);
-                                 modifiedStream.push(null);
-                                 
-                                 modifiedStream.statusCode = res.statusCode;
-                                 modifiedStream.headers = res.headers;
-                                 modifiedStream.headers['content-length'] = Buffer.byteLength(newBody);
-                                 delete modifiedStream.headers['content-encoding']; // Ensure no encoding remains
-                                 
-                                 if (callback) callback(modifiedStream);
-                                 // Also emit 'response' event on request object for listeners not using callback
-                                 originalEmit.call(req, 'response', modifiedStream);
-                             } else {
-                                 // Not the structure we want, pass through
-                                 const pass = new (require('stream').PassThrough)();
-                                 pass.push(buffer);
-                                 pass.push(null);
-                                 Object.assign(pass, res);
-                                 if (callback) callback(pass);
-                                 originalEmit.call(req, 'response', pass);
-                             }
-                         } catch (err) {
-                             console.error('[OPGGHOOK] Error processing response:', err);
-                         }
-                     });
-                     
-                     return true; // Event handled
-                 }
-             }
-             return originalEmit.apply(this, [type, ...emitArgs]);
-        };
-        
-        let userCallback = null;
-        if (typeof args[args.length - 1] === 'function') {
-            userCallback = args.pop();
-        } else if (typeof args[1] === 'function') {
-            userCallback = args[1];
-            args[1] = undefined; // clear it
-        }
-        
-        const interceptedReq = originalRequest.apply(this, args);
-        
-        interceptedReq.on('response', (res) => {
-             if (res.statusCode >= 200 && res.statusCode < 300) {
-                 console.log('[OPGGHOOK] Intercepting Response stream...');
-                 const chunks = [];
-                 res.on('data', chunk => chunks.push(chunk));
-                 res.on('end', () => {
-                     const buffer = Buffer.concat(chunks);
-                     const str = buffer.toString('utf8');
-                     
-                     let modified = false;
-                     let finalBody = str;
-
-                     try {
-                         const json = JSON.parse(str);
-                         if (json && json.data) {
-                             console.log('[OPGGHOOK] Patching data...');
-                             json.data.subscriptions = [PREMIUM_DATA];
-                             finalBody = JSON.stringify(json);
-                             modified = true;
-                         }
-                     } catch(e) {
-                         console.error('[OPGGHOOK] JSON Parse Failed:', e.message);
-                     }
-
-                     // Create a fresh stream for the modified (or original) body
-                     const newRes = new (require('stream').PassThrough)();
-                     
-                     // Copy necessary metadata ONLY. Do NOT copy internal stream state.
-                     newRes.statusCode = res.statusCode;
-                     newRes.statusMessage = res.statusMessage;
-                     newRes.headers = JSON.parse(JSON.stringify(res.headers)); // Deep copy headers
-                     newRes.url = res.url;
-                     newRes.method = res.method;
-                     
-                     // Fix headers
-                     delete newRes.headers['content-encoding'];
-                     if (modified) {
-                         newRes.headers['content-length'] = Buffer.byteLength(finalBody);
-                     } else {
-                         // If we didn't modify, we might still have decompressed it effectively by reading it
-                         // so we must ensure content-length matches the buffer we are pushing
-                         // But we read it as a buffer, then to string. 
-                         // If we just push the buffer back, we are safe.
-                         if (!modified) finalBody = buffer; // Use raw buffer if not modified to be safe
-                         newRes.headers['content-length'] = Buffer.byteLength(finalBody);
-                     }
-
-                     // Push data to the new stream
-                     newRes.push(finalBody);
-                     newRes.push(null);
-                     
-                     if (userCallback) userCallback(newRes);
-                 });
-             } else {
-                 if (userCallback) userCallback(res);
-             }
-        });
-        
-        return interceptedReq;
-    }
-
-    return originalRequest.apply(this, args);
+// Only used by No-Login builds, and only when nobody is actually signed in.
+const SYNTHETIC_MEMBER = {
+  mid: 4396,
+  provider: 'opgg',
+  nick: 'JieJie',
+  email: 'Lv-Max',
+  scopes: ['remember', 'base'],
 };
 
-// Start the original application
-console.log('[OPGGHOOK] Starting original main.js...');
+const isPlainObject = (value) =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** electron-store instances are told apart by their backing file. */
+function isStore(store, fileName) {
+  try {
+    return typeof store.path === 'string' && path.basename(store.path) === fileName;
+  } catch (error) {
+    return false;
+  }
+}
+
+/** store-app.json `_ot_v2_member`: append an ad-free subscription. */
+function withPremiumSubscription(member) {
+  const base = isPlainObject(member) ? member : null;
+
+  // Login builds leave a signed-out client completely alone.
+  if (!base && !NO_LOGIN) return member;
+
+  const patched = Object.assign({}, base || SYNTHETIC_MEMBER);
+  const subscriptions = Array.isArray(patched.subscriptions)
+    ? patched.subscriptions.slice()
+    : [];
+
+  if (!subscriptions.some((s) => isPlainObject(s) && s.plan_id === PREMIUM_SUBSCRIPTION.plan_id)) {
+    subscriptions.push(PREMIUM_SUBSCRIPTION);
+  }
+
+  patched.subscriptions = subscriptions;
+  return patched;
+}
+
+/** store-web.json `member`: the already-reduced shape the renderer consumes. */
+function withPremiumFeatures(member) {
+  const base = isPlainObject(member) ? member : null;
+
+  if (!base) {
+    if (!NO_LOGIN) return member;
+    return {
+      mid: SYNTHETIC_MEMBER.mid,
+      email: SYNTHETIC_MEMBER.email,
+      nickname: SYNTHETIC_MEMBER.nick,
+      subscriptions: [PREMIUM_SUBSCRIPTION],
+      features: FEATURES.slice(),
+    };
+  }
+
+  // Same rule as above: on a Login build a signed-out client stays untouched.
+  if (!NO_LOGIN && !base.mid) return member;
+
+  const current = Array.isArray(base.features) ? base.features : [];
+  const merged = Array.from(new Set(current.concat(FEATURES)));
+  if (merged.length === current.length) return member;
+
+  return Object.assign({}, base, { features: merged });
+}
+
+try {
+  const Store = require('electron-store');
+  const originalGet = Store.prototype.get;
+  const originalSet = Store.prototype.set;
+
+  Object.defineProperty(Store.prototype, 'get', {
+    configurable: true,
+    writable: true,
+    value: function get(key, defaultValue) {
+      const value = originalGet.call(this, key, defaultValue);
+      try {
+        if (key === '_ot_v2_member' && isStore(this, 'store-app.json')) {
+          return withPremiumSubscription(value);
+        }
+        if (key === 'member' && isStore(this, 'store-web.json')) {
+          return withPremiumFeatures(value);
+        }
+        if (NO_LOGIN && key === '_ot_guest' && isStore(this, 'store-app.json')) {
+          return false;
+        }
+        if (NO_LOGIN && key === 'guest' && isStore(this, 'store-web.json')) {
+          return false;
+        }
+      } catch (error) {
+        console.error(TAG, 'get hook failed for', key, error);
+      }
+      return value;
+    },
+  });
+
+  Object.defineProperty(Store.prototype, 'set', {
+    configurable: true,
+    writable: true,
+    value: function set(key, value) {
+      try {
+        if (arguments.length >= 2 && key === 'member' && isStore(this, 'store-web.json')) {
+          return originalSet.call(this, key, withPremiumFeatures(value));
+        }
+      } catch (error) {
+        console.error(TAG, 'set hook failed for', key, error);
+      }
+      return originalSet.apply(this, arguments);
+    },
+  });
+
+  console.log(TAG, `electron-store patched (mode: ${NO_LOGIN ? 'no-login' : 'login'})`);
+} catch (error) {
+  // Never brick the client over a failed patch - just run unmodified.
+  console.error(TAG, 'failed to patch electron-store:', error);
+}
+
 require('./main.js');

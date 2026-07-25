@@ -21,6 +21,23 @@ We provide **two** versions in each [Release](https://github.com/Lv-Max/OP-GG-Cl
   - **No Login Required**.
   - Unlocks subscribers-only features.
 
+## 🔧 How It Works
+
+Both builds add a single file — [`hook.js`](hook.js) — to `app.asar` and point
+`package.json`'s `main` at it. The original `main.js` is never rewritten.
+
+At startup the hook wraps `electron-store` and appends an ad-free subscription to
+`_ot_v2_member`, which is where every code path in the client converges before
+`features` reach the renderer. Because it targets a persisted data shape rather
+than minified identifiers, a new OP.GG build cannot break the pattern matching.
+Nothing is written to disk, so removing the patch restores the original state.
+
+The repack keeps native modules unpacked (`--unpack`). Without that, Electron
+loads `electron-overlay.node` from a lone temp copy where it can no longer find
+its sibling `n_overlay.x64.dll` / `injector.exe`, and the in-game overlay
+silently stops appearing. `tools/verify-asar-unpacked.js` fails the build if that
+ever regresses.
+
 ## 🛠️ Local Patcher Tool
 
 You can also patch your own existing installation using the included Python tool.
