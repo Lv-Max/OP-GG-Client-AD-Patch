@@ -1,0 +1,5 @@
+# Built launcher binary (published via Releases / CI artifacts, not committed)
+launcher/*.exe
+
+# Logs and scratch
+*.log
