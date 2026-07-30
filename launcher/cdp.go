@@ -18,21 +18,20 @@ type cdpClient struct {
 	ws      *websocket.Conn
 	mu      sync.Mutex
 	nextID  int
-	pending map[int]chan json.RawMessage
-
-	events chan cdpEvent
+	pending map[int]chan cdpReply
 }
 
-type cdpEvent struct {
-	Method string
-	Params json.RawMessage
+type cdpReply struct {
+	data          json.RawMessage
+	protocolError bool
 }
 
 func inspectorWebSocketURL(port int, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
 	url := fmt.Sprintf("http://127.0.0.1:%d/json/list", port)
+	client := http.Client{Timeout: 750 * time.Millisecond}
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(url)
+		resp, err := client.Get(url)
 		if err == nil {
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
@@ -51,9 +50,8 @@ func inspectorWebSocketURL(port int, timeout time.Duration) (string, error) {
 func dialCDP(wsURL string) (*cdpClient, error) {
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
-		// The inspector can send large frames (getScriptSource ~1.8MB).
-		ReadBufferSize:  1 << 20,
-		WriteBufferSize: 1 << 20,
+		ReadBufferSize:   1 << 20,
+		WriteBufferSize:  1 << 20,
 	}
 	ws, _, err := dialer.Dial(wsURL, nil)
 	if err != nil {
@@ -62,8 +60,7 @@ func dialCDP(wsURL string) (*cdpClient, error) {
 	ws.SetReadLimit(64 << 20)
 	c := &cdpClient{
 		ws:      ws,
-		pending: make(map[int]chan json.RawMessage),
-		events:  make(chan cdpEvent, 256),
+		pending: make(map[int]chan cdpReply),
 	}
 	go c.readLoop()
 	return c, nil
@@ -77,17 +74,14 @@ func (c *cdpClient) readLoop() {
 			for _, ch := range c.pending {
 				close(ch)
 			}
-			c.pending = map[int]chan json.RawMessage{}
+			c.pending = map[int]chan cdpReply{}
 			c.mu.Unlock()
-			close(c.events)
 			return
 		}
 		var msg struct {
 			ID     int             `json:"id"`
 			Result json.RawMessage `json:"result"`
 			Error  json.RawMessage `json:"error"`
-			Method string          `json:"method"`
-			Params json.RawMessage `json:"params"`
 		}
 		if json.Unmarshal(data, &msg) != nil {
 			continue
@@ -99,19 +93,13 @@ func (c *cdpClient) readLoop() {
 			c.mu.Unlock()
 			if ch != nil {
 				if msg.Error != nil {
-					ch <- msg.Error
+					ch <- cdpReply{data: msg.Error, protocolError: true}
 				} else {
-					ch <- msg.Result
+					ch <- cdpReply{data: msg.Result}
 				}
 				close(ch)
 			}
 			continue
-		}
-		if msg.Method != "" {
-			select {
-			case c.events <- cdpEvent{Method: msg.Method, Params: msg.Params}:
-			default: // drop if the consumer is slow; we only care about a few events
-			}
 		}
 	}
 }
@@ -121,7 +109,7 @@ func (c *cdpClient) send(method string, params map[string]any, timeout time.Dura
 	c.mu.Lock()
 	c.nextID++
 	id := c.nextID
-	ch := make(chan json.RawMessage, 1)
+	ch := make(chan cdpReply, 1)
 	c.pending[id] = ch
 	c.mu.Unlock()
 
@@ -139,11 +127,14 @@ func (c *cdpClient) send(method string, params map[string]any, timeout time.Dura
 	}
 
 	select {
-	case res, ok := <-ch:
+	case reply, ok := <-ch:
 		if !ok {
 			return nil, fmt.Errorf("%s: connection closed", method)
 		}
-		return res, nil
+		if reply.protocolError {
+			return nil, fmt.Errorf("%s: protocol error: %s", method, strings.TrimSpace(string(reply.data)))
+		}
+		return reply.data, nil
 	case <-time.After(timeout):
 		c.mu.Lock()
 		delete(c.pending, id)
@@ -159,10 +150,11 @@ func (c *cdpClient) close() {
 // evaluate runs an expression in the default (main-process) context and returns
 // the string value, if any.
 func (c *cdpClient) evaluate(expr string, timeout time.Duration) (string, error) {
-	res, err := c.send("Runtime.evaluate", map[string]any{
+	params := map[string]any{
 		"expression":    expr,
 		"returnByValue": true,
-	}, timeout)
+	}
+	res, err := c.send("Runtime.evaluate", params, timeout)
 	if err != nil {
 		return "", err
 	}
