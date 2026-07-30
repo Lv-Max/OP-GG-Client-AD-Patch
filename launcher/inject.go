@@ -1,61 +1,101 @@
 package main
 
-// installJS runs in OP.GG's main process after the launcher has stashed the
-// bundle's __webpack_require__ on globalThis. It marks the member as ad-free;
-// the renderer then never creates the ad element, so no ad loads. Works signed
-// in (keeps the real account) or signed out (seeds a member).
+// installJS runs in OP.GG's main process. It reaches the app's already-loaded
+// axios and electron-store singletons through Node's require cache - no webpack
+// internals, no module resolution, no breakpoints - and:
+//
+//   - axios: on the /v2/members/me response, append an ad-free subscription
+//     (signed in) or synthesize an ad-free member (signed out).
+//   - electron-store, on store-app reads:
+//     _ot_v2_member -> always carries the ad-free subscription (in memory).
+//     _ot / _ot_v2_refresh -> seeded when empty, so a signed-out client passes
+//     hasMemberToken() and runs opggMemberLogin() -> currentMember(), which
+//     reads the ad-free member above and writes it to AppStatus. This is what
+//     makes the signed-out case work, and it needs no network.
+//
+// The renderer reads AppStatus.member: member.mid marks it logged in and
+// member.features (a string array) containing "ad_free" suppresses the ad view
+// and shrinks the window. Real sessions keep their own values (only empties are
+// seeded), so signed-in users are unaffected. Nothing is written to disk.
+//
+// It is idempotent and safe to run repeatedly; returns "ok:<axios>:<store>".
 const installJS = `(function(){
-  try {
-    var wr = globalThis.__opgg_wr;
-    if (!wr) return 'no-wr';
-    // Find the module exporting AppStore/AppStatus by shape, not a fixed id.
-    var mod = null;
-    try {
-      var cache = wr.c || {};
-      for (var k in cache) {
-        var ex = cache[k] && cache[k].exports;
-        if (ex && ex.AppStatus && ex.AppStore && ex.WebStore) { mod = ex; break; }
+  try{
+    var req = process.mainModule && process.mainModule.require;
+    if(!req) return 'no-main';
+    var M = req('module');
+    if(!M || !M._cache) return 'no-cache';
+    var cache = M._cache;
+    var F=['ad_free','premium_badge','lol_mypage','lol_favorites','lol_auto_record','lol_super_renew','tft_mypage','val_mypage','duo_pull_up','duo_highlight'];
+    var SUB={plan_id:3,plan_name:'OP.GG Ad-free',state:'active',expiry_at:4102444800,features:F};
+
+    var keys=Object.keys(cache);
+    var ax=false, st=false;
+
+    // axios: the cached module whose exports expose an interceptors API.
+    for(var i=0;i<keys.length;i++){
+      if(keys[i].indexOf('axios')<0) continue;
+      var ex=cache[keys[i]].exports; var a=ex&&ex.default||ex;
+      if(!(a&&a.interceptors&&a.interceptors.response)) continue;
+      if(!a.__opgg){
+        a.interceptors.response.use(function(res){
+          try{
+            var u=res&&res.config&&res.config.url;
+            if(typeof u==='string'&&u.split('?')[0].indexOf('/v2/members/me')>=0){
+              var b=res.data;
+              if(b&&b.code==='SUCCESS'&&b.data&&typeof b.data==='object'){
+                var kept=Array.isArray(b.data.subscriptions)?b.data.subscriptions.filter(function(s){return !s||s.plan_id!==3}):[];
+                b.data.subscriptions=kept.concat([SUB]);
+              }else{
+                res.data={code:'SUCCESS',data:{mid:4396,provider:'opgg',nick:'JieJie',email:'Lv-Max',subscriptions:[SUB],scopes:['remember','base']},token:'opgg-ad-patch',refresh_token:'opgg-ad-patch'};
+                res.status=200;
+              }
+            }
+          }catch(e){}
+          return res;
+        });
+        a.__opgg=true;
       }
-    } catch (e) {}
-    if (!mod) { try { mod = wr(8699); } catch (e) {} } // fallback to the known id
-    if (!mod || !mod.AppStatus) return 'no-appstatus';
-    var AS = mod.AppStatus, STORE = mod.AppStore;
-    var F = ['ad_free','premium_badge','lol_mypage','lol_favorites','lol_auto_record','lol_super_renew','tft_mypage','val_mypage','duo_pull_up','duo_highlight'];
-    var SUB = { plan_id: 3, plan_name: 'OP.GG Ad-free', state: 'active', expiry_at: 4102444800, features: F };
-    var withSub = function(m){
-      var b = (m && typeof m === 'object') ? Object.assign({}, m) : { mid: 4396, provider: 'opgg', nick: 'JieJie', email: 'Lv-Max', scopes: ['remember','base'] };
-      var s = Array.isArray(b.subscriptions) ? b.subscriptions.filter(function(x){ return !x || x.plan_id !== 3; }) : [];
-      b.subscriptions = s.concat([SUB]);
-      return b;
-    };
-    // Make the store report the ad-free subscription (in memory only) so the
-    // window also shrinks to the ad-free layout.
-    if (STORE && STORE.get && !STORE.__opggGet) {
-      var og = STORE.get.bind(STORE);
-      STORE.get = function(k,d){ var v = og(k,d); return k === '_ot_v2_member' ? withSub(v) : v; };
-      STORE.__opggGet = true;
+      ax=true; break;
     }
-    // Any member the app stores keeps ad_free in its features.
-    if (AS.set && !AS.__opggSet) {
-      var os = AS.set.bind(AS);
-      AS.set = function(k,v){
-        if (k === 'member' && v && typeof v === 'object') {
-          v = Object.assign({}, v, { features: Array.from(new Set((Array.isArray(v.features) ? v.features : []).concat(F))) });
-        }
-        return os(k,v);
-      };
-      AS.__opggSet = true;
+
+    // electron-store: the cached module whose exports is the Store class.
+    for(var j=0;j<keys.length;j++){
+      if(keys[j].indexOf('electron-store')<0) continue;
+      var se=cache[keys[j]].exports; var S=se&&se.default||se;
+      if(!(S&&S.prototype&&S.prototype.get)) continue;
+      if(!S.prototype.__opgg){
+        var og=S.prototype.get;
+        S.prototype.get=function(k,d){
+          var v=og.call(this,k,d);
+          try{
+            if(String(this.path||'').indexOf('store-app')>=0){
+              if(k==='_ot_v2_member'){
+                var b=(v&&typeof v==='object')?Object.assign({},v):{mid:4396,provider:'opgg',nick:'JieJie',email:'Lv-Max',scopes:['remember','base']};
+                var s=Array.isArray(b.subscriptions)?b.subscriptions.filter(function(x){return !x||x.plan_id!==3}):[];
+                b.subscriptions=s.concat([SUB]);
+                return b;
+              }
+              // Signed out: seed a session so hasMemberToken() passes and the
+              // client runs opggMemberLogin() -> currentMember(), which reads the
+              // ad-free member above and writes it to AppStatus (network-free).
+              // _ot_v2_refresh is the key hasMemberToken() actually checks; _ot
+              // makes the member fetch skip the token-refresh branch. Real
+              // sessions keep their own values (only empties are seeded).
+              if((k==='_ot'||k==='_ot_v2_refresh') && !v) return 'opgg-ad-patch';
+            }
+          }catch(e){}
+          return v;
+        };
+        S.prototype.__opgg=true;
+      }
+      st=true; break;
     }
-    // Signed out: no member exists, so seed one.
-    var cur = AS.get('member');
-    if (!cur || !cur.mid) { var syn = withSub(null); syn.features = F.slice(); AS.set('member', syn); AS.set('guest', false); }
-    var g = AS.get('member');
-    return 'ok:' + (g && g.mid) + ':' + ((g && g.features || []).length);
-  } catch (e) { return 'ERR:' + (e && e.message); }
+
+    if(ax||st) return 'ok:'+ax+':'+st;
+    return 'notready';
+  }catch(e){return 'ERR:'+(e&&e.message);}
 })()`
 
 // closeInspectorJS shuts the debug port once we are done.
 const closeInspectorJS = `(function(){ try { process.mainModule.require('inspector').close(); return 'closed'; } catch(e){ return 'noclose:' + (e && e.message); } })()`
-
-// Start of the webpack require function; the launcher breaks just inside it.
-const webpackRequireAnchor = "function __webpack_require__(e){"

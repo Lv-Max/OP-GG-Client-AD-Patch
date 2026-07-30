@@ -2,7 +2,6 @@ package main
 
 import (
 	"crypto/rand"
-	"encoding/json"
 	"fmt"
 	"math/big"
 	"os"
@@ -23,28 +22,29 @@ func main() {
 	if err != nil {
 		fatal(err.Error())
 	}
-
-	// The launcher must own the first instance for --inspect to take effect
-	// (the client uses a single-instance lock). Close any running copy first.
-	if killRunning() {
-		time.Sleep(2 * time.Second)
-	}
-
-	port := randomPort()
+	killRunning()
 	fmt.Println("opening OP.GG...")
-	if err := spawn(exe, port); err != nil {
-		fatal("failed to start client: " + err.Error())
+
+	var lastErr error
+	for attempt := 1; attempt <= 2; attempt++ {
+		if attempt > 1 {
+			killRunning()
+			time.Sleep(2 * time.Second)
+		}
+		port := randomPort()
+		if err := spawn(exe, port); err != nil {
+			fatal("failed to start client: " + err.Error())
+		}
+		if lastErr = inject(port); lastErr == nil {
+			fmt.Println("patch applied")
+			holdOpen()
+			return
+		}
 	}
 
-	if err := injectWithRetry(port); err != nil {
-		// Never leave the user worse off: the client is already running, just
-		// unpatched. Report and exit success.
-		fmt.Println("patch not applied:", err.Error())
-		fmt.Println("the client is running normally (no changes made).")
-		holdOpen()
-		return
-	}
-	fmt.Println("patch applied")
+	// Never leave the user worse off: the client is running, just unpatched.
+	fmt.Println("patch not applied:", lastErr.Error())
+	fmt.Println("the client is running normally (no changes made).")
 	holdOpen()
 }
 
@@ -58,19 +58,6 @@ func holdOpen() {
 	fmt.Println()
 }
 
-func injectWithRetry(port int) error {
-	var lastErr error
-	for attempt := 1; attempt <= 3; attempt++ {
-		if err := inject(port); err != nil {
-			lastErr = err
-			time.Sleep(500 * time.Millisecond)
-			continue
-		}
-		return nil
-	}
-	return lastErr
-}
-
 func inject(port int) error {
 	wsURL, err := inspectorWebSocketURL(port, 20*time.Second)
 	if err != nil {
@@ -82,156 +69,29 @@ func inject(port int) error {
 	}
 	defer c.close()
 
-	if err := grabWebpackRequire(c); err != nil {
-		return fmt.Errorf("reach app internals: %w", err)
+	if _, err := c.send("Runtime.enable", nil, 5*time.Second); err != nil {
+		return err
 	}
+	c.send("Runtime.runIfWaitingForDebugger", nil, 5*time.Second) // no-op under --inspect
 
-	// Install the hook, retrying until the store module is loaded.
+	// Install the hook, retrying until the app's modules are loaded. The hook is
+	// a persistent interceptor/wrapper, so once it takes we are done - it catches
+	// the member request whenever it happens.
 	deadline := time.Now().Add(15 * time.Second)
 	var last string
 	for time.Now().Before(deadline) {
-		v, err := c.evaluate(installJS, 5*time.Second)
+		v, err := c.evaluate(installJS, 6*time.Second)
 		if err != nil {
 			return err
 		}
 		last = v
 		if strings.HasPrefix(v, "ok:") {
-			break
+			c.evaluate(closeInspectorJS, 3*time.Second)
+			return nil
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
-	if !strings.HasPrefix(last, "ok:") {
-		return fmt.Errorf("hook did not take (last: %q)", last)
-	}
-
-	// Re-assert briefly so the value is present before the renderer reads it.
-	for i := 0; i < 12; i++ {
-		c.evaluate(installJS, 3*time.Second)
-		time.Sleep(250 * time.Millisecond)
-	}
-
-	// Shut the debug port now that we are done.
-	c.evaluate(closeInspectorJS, 3*time.Second)
-	return nil
-}
-
-// grabWebpackRequire stashes the bundle's private __webpack_require__ on
-// globalThis by breaking inside it once, then removing the breakpoint.
-func grabWebpackRequire(c *cdpClient) error {
-	if _, err := c.send("Runtime.enable", nil, 5*time.Second); err != nil {
-		return err
-	}
-	if _, err := c.send("Debugger.enable", nil, 5*time.Second); err != nil {
-		return err
-	}
-
-	// Find main.js among the (replayed) scriptParsed events.
-	scripts := map[string]string{}
-	mainID := ""
-	deadline := time.Now().Add(15 * time.Second)
-	for mainID == "" && time.Now().Before(deadline) {
-		ev, ok := waitEvent(c, 15*time.Second)
-		if !ok {
-			break
-		}
-		if ev.Method == "Debugger.scriptParsed" {
-			var p struct {
-				ScriptID string `json:"scriptId"`
-				URL      string `json:"url"`
-			}
-			if json.Unmarshal(ev.Params, &p) == nil {
-				scripts[p.ScriptID] = p.URL
-				if strings.HasSuffix(p.URL, "assets/main/main.js") {
-					mainID = p.ScriptID
-				}
-			}
-		}
-	}
-	if mainID == "" {
-		return fmt.Errorf("main.js not found")
-	}
-
-	// Fetch source, locate the require function body.
-	res, err := c.send("Debugger.getScriptSource", map[string]any{"scriptId": mainID}, 15*time.Second)
-	if err != nil {
-		return err
-	}
-	var src struct {
-		ScriptSource string `json:"scriptSource"`
-	}
-	if json.Unmarshal(res, &src) != nil || src.ScriptSource == "" {
-		return fmt.Errorf("empty script source")
-	}
-	idx := strings.Index(src.ScriptSource, webpackRequireAnchor)
-	if idx < 0 {
-		return fmt.Errorf("webpack require anchor not found (client updated?)")
-	}
-	col := idx + len(webpackRequireAnchor)
-
-	bp, err := c.send("Debugger.setBreakpoint", map[string]any{
-		"location": map[string]any{"scriptId": mainID, "lineNumber": 0, "columnNumber": col},
-	}, 10*time.Second)
-	if err != nil {
-		return err
-	}
-	var bpRes struct {
-		BreakpointID string `json:"breakpointId"`
-	}
-	json.Unmarshal(bp, &bpRes)
-
-	// Wait for the breakpoint to hit; grab the require in that frame.
-	grabbed := false
-	deadline = time.Now().Add(15 * time.Second)
-	for !grabbed && time.Now().Before(deadline) {
-		ev, ok := waitEvent(c, 15*time.Second)
-		if !ok {
-			break
-		}
-		if ev.Method != "Debugger.paused" {
-			continue
-		}
-		var p struct {
-			HitBreakpoints []string `json:"hitBreakpoints"`
-			CallFrames     []struct {
-				CallFrameID string `json:"callFrameId"`
-			} `json:"callFrames"`
-		}
-		if json.Unmarshal(ev.Params, &p) != nil || len(p.CallFrames) == 0 {
-			c.send("Debugger.resume", nil, 3*time.Second)
-			continue
-		}
-		if len(p.HitBreakpoints) == 0 {
-			c.send("Debugger.resume", nil, 3*time.Second)
-			continue
-		}
-		_, err := c.send("Debugger.evaluateOnCallFrame", map[string]any{
-			"callFrameId":   p.CallFrames[0].CallFrameID,
-			"expression":    "(globalThis.__opgg_wr=__webpack_require__),'ok'",
-			"returnByValue": true,
-		}, 5*time.Second)
-		if err != nil {
-			return err
-		}
-		grabbed = true
-		if bpRes.BreakpointID != "" {
-			c.send("Debugger.removeBreakpoint", map[string]any{"breakpointId": bpRes.BreakpointID}, 3*time.Second)
-		}
-		c.send("Debugger.resume", nil, 3*time.Second)
-		c.send("Debugger.disable", nil, 3*time.Second)
-	}
-	if !grabbed {
-		return fmt.Errorf("breakpoint never hit")
-	}
-	return nil
-}
-
-func waitEvent(c *cdpClient, timeout time.Duration) (cdpEvent, bool) {
-	select {
-	case ev, ok := <-c.events:
-		return ev, ok
-	case <-time.After(timeout):
-		return cdpEvent{}, false
-	}
+	return fmt.Errorf("hook did not take (last: %q)", last)
 }
 
 // --- environment helpers ---------------------------------------------------

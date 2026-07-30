@@ -107,10 +107,15 @@ func (c *cdpClient) readLoop() {
 			}
 			continue
 		}
+		// scriptParsed is a flood (1000+ at startup); drop it so it can never
+		// crowd Debugger.paused out of the bounded events channel.
+		if msg.Method == "Debugger.scriptParsed" {
+			continue
+		}
 		if msg.Method != "" {
 			select {
 			case c.events <- cdpEvent{Method: msg.Method, Params: msg.Params}:
-			default: // drop if the consumer is slow; we only care about a few events
+			default:
 			}
 		}
 	}
