@@ -1,24 +1,7 @@
 package main
 
-// installJS runs in OP.GG's main process. It reaches the app's already-loaded
-// axios and electron-store singletons through Node's require cache - no webpack
-// internals, no module resolution, no breakpoints - and:
-//
-//   - axios: on the /v2/members/me response, append an ad-free subscription
-//     (signed in) or synthesize an ad-free member (signed out).
-//   - electron-store, on store-app reads:
-//     _ot_v2_member -> always carries the ad-free subscription (in memory).
-//     _ot / _ot_v2_refresh -> seeded when empty, so a signed-out client passes
-//     hasMemberToken() and runs opggMemberLogin() -> currentMember(), which
-//     reads the ad-free member above and writes it to AppStatus. This is what
-//     makes the signed-out case work, and it needs no network.
-//
-// The renderer reads AppStatus.member: member.mid marks it logged in and
-// member.features (a string array) containing "ad_free" suppresses the ad view
-// and shrinks the window. Real sessions keep their own values (only empties are
-// seeded), so signed-in users are unaffected. Nothing is written to disk.
-//
-// It is idempotent and safe to run repeatedly; returns "ok:<axios>:<store>".
+// installJS is evaluated inside the client's main process. It is idempotent,
+// returns "ok:<a>:<b>", writes nothing to disk, and leaves real sessions as-is.
 const installJS = `(function(){
   try{
     var req = process.mainModule && process.mainModule.require;
@@ -32,7 +15,6 @@ const installJS = `(function(){
     var keys=Object.keys(cache);
     var ax=false, st=false;
 
-    // axios: the cached module whose exports expose an interceptors API.
     for(var i=0;i<keys.length;i++){
       if(keys[i].indexOf('axios')<0) continue;
       var ex=cache[keys[i]].exports; var a=ex&&ex.default||ex;
@@ -59,7 +41,6 @@ const installJS = `(function(){
       ax=true; break;
     }
 
-    // electron-store: the cached module whose exports is the Store class.
     for(var j=0;j<keys.length;j++){
       if(keys[j].indexOf('electron-store')<0) continue;
       var se=cache[keys[j]].exports; var S=se&&se.default||se;
@@ -76,12 +57,6 @@ const installJS = `(function(){
                 b.subscriptions=s.concat([SUB]);
                 return b;
               }
-              // Signed out: seed a session so hasMemberToken() passes and the
-              // client runs opggMemberLogin() -> currentMember(), which reads the
-              // ad-free member above and writes it to AppStatus (network-free).
-              // _ot_v2_refresh is the key hasMemberToken() actually checks; _ot
-              // makes the member fetch skip the token-refresh branch. Real
-              // sessions keep their own values (only empties are seeded).
               if((k==='_ot'||k==='_ot_v2_refresh') && !v) return 'opgg-ad-patch';
             }
           }catch(e){}

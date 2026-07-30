@@ -3,3 +3,6 @@ launcher/*.exe
 
 # Logs and scratch
 *.log
+
+# Private research notes (kept locally, never published)
+notes/

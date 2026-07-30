@@ -11,9 +11,8 @@ import (
 	"time"
 )
 
-// Launches the unmodified OP.GG client with the Node inspector enabled, injects
-// a hook into its main process over the DevTools protocol, then detaches.
-// Nothing on disk is changed, so it keeps working across OP.GG updates.
+// Launches the unmodified OP.GG client, applies the ad-free state at runtime,
+// then detaches. Nothing on disk is changed.
 
 func main() {
 	fmt.Println("OP.GG Launcher - https://github.com/Lv-Max/OP-GG-Client-AD-Patch")
@@ -74,9 +73,7 @@ func inject(port int) error {
 	}
 	c.send("Runtime.runIfWaitingForDebugger", nil, 5*time.Second) // no-op under --inspect
 
-	// Install the hook, retrying until the app's modules are loaded. The hook is
-	// a persistent interceptor/wrapper, so once it takes we are done - it catches
-	// the member request whenever it happens.
+	// Retry until it takes (the app's modules need to be loaded first).
 	deadline := time.Now().Add(15 * time.Second)
 	var last string
 	for time.Now().Before(deadline) {
