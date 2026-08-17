@@ -15,6 +15,8 @@ Use the launcher (instead of the original OP.GG shortcut) each time you start th
 - **Signed in or signed out — both work.** You can sign in with your own OP.GG account once (it's remembered) and keep your real profile, or stay signed out; either way the ads are removed.
 - If OP.GG is already running, the launcher closes it first (the client's single-instance lock means the patch can only apply to a fresh launch).
 
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/I4Z82584B9)
+
 ## 🛠️ Build
 
 Requires [Go](https://go.dev/) 1.24+.
