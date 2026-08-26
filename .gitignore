@@ -1,3 +1,4 @@
 launcher/*.exe
 *.log
 notes/
+harness/
